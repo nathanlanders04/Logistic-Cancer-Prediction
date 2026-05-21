@@ -1,0 +1,212 @@
+---
+title: "Project 2 DAT 402"
+author: "Nathan Landers"
+date: "2025-12-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction and Objectives
+In this project, a dataset containing variables related to patient data across five different cancer types: Breast, Prostate, Skin, Colon, and Lung. In the previous project, I focused solely on numerical variables to predict patients' Overall Risk Scores for cancer. After learning a number of methods for modeling categorical variables, this project will focus on predicting cancer types using variables such as obesity and smoking. \
+\
+The primary objectives of this project are to: \
+1. Prepare the data set for use \
+2. Adapt code from the lecture and apply it to a new data set that will be predicting five variables \
+3. Predict five cancer types with multinomial logistic regression and a tree-based model \
+4. Compare performance on test data \
+\
+
+## Importing the Data Set and Libraries
+```{r}
+library(tree)
+library(ISLR)
+library(nnet)
+library(ggplot2)
+library(glmnet)
+
+cancerData <- read.csv("~/Downloads/cancer-risk-factors.csv")
+```
+
+## Dataset Information
+The dataset contains 21 patient variables with 2000 observations, including information about patients with one of five types of cancer. The primary variable of this project is Cancer_Type, and the variables that predict this type of cancer. \
+```{r}
+str(cancerData)
+```
+
+## Data Wrangling
+Factors, such as Patient_ID, will be removed as they are not relevant in predicting a specific Cancer_Type for a patient. Here, the variables crucial to predicting Cancer_Type were filtered into a new data set. Overall_Risk_Score and Risk_Level were also removed, as they are not indicative of a specific cancer type. Instead, they are scores related to one's overall risk of any kind of cancer. There are no missing entries that need to be omitted from the dataset, and all variables are numerical, except for Cancer_Type. \
+
+```{r}
+cancerDataFiltered <- cancerData[,c(2:17, 19:20)]
+sum(is.na(cancerData)) 
+head(cancerDataFiltered)
+```
+
+## Multinomial Logistic Regression
+Here, I adapted the code from 11.3 on Forensic glass, which applied six variables to predict three different variables. In this case, I wanted to use all variables as a predictor of cancer type, as they are all relevant to a specific type of cancer. Furthermore, instead of 3 outcomes, I wanted the model to have five possible outcomes. The data frame below shows the number of each Cancer_Type present out of the 2000 data. 
+```{r}
+y = as.factor(cancerDataFiltered$Cancer_Type)
+table(y, cancerDataFiltered$Cancer_Type)
+
+x = cancerDataFiltered[, colnames(cancerDataFiltered) != "Cancer_Type"]
+stdize = function(x) {return((x-min(x))/(max(x)-min(x)))}
+
+x = apply(x,2,stdize)
+ddf = data.frame(type=y,x)
+```
+
+## Out of Sample Performance: Logistic
+Instead of evaluating how the model performed only on in-sample data, I tested performance on out-of-sample data using a 70/30 split. \
+```{r}
+set.seed(1)
+
+# 70/30 data split
+train = sample(1:nrow(ddf), 0.7*nrow(ddf))
+test = setdiff(1:nrow(ddf), train)
+
+# create logistic model with training data
+logisticModel = multinom(type ~ ., data = ddf[train,]) 
+```
+
+The overall accuracy score for the entire model was calculated, as multinomial means must be used to evaluate performance, rather than a tool like the false positivity rate or an ROC curve. Here, the model was relatively successful with an overall accuracy score of 0.7266667. \
+```{r}
+# predict on test date
+prediction = predict(logisticModel, newdata = ddf[test,])
+
+# confusion matrix with predicted vs actual cancer types
+confLogistic = table(Predicted = prediction, Actual = ddf[test,]$type)
+confLogistic
+
+# calculates accuracy score 
+accLogistic = sum(diag(confLogistic)) / sum(confLogistic)
+accLogistic
+
+```
+Moreover, there was also a difference in accuracy scores among specific cancers, with some cancers being able to predict more accurately, including Breast and Lung cancer, with accuracy scores of approximately 0.8181818 and 0.8163265, respectively. On the other hand, the accuracy for correctly predicting skin cancer was the lowest, with an accuracy of about 0.5106383. \
+
+```{r}
+# calculates individual accuracy scores
+cancerAccLogistic <- diag(confLogistic) / colSums(confLogistic)
+cancerAccLogistic
+```
+
+Finally, the model's performance was evaluated using deviance as a measure of goodness of fit. Unlike in lecture, where we used the "binomial" family, the "multinomial" family was used as we are predicting more than two categories. Overall, as lambda decreases, deviance decreases, indicating that a more complex model fits the data better. A simpler model indicates high deviance. 
+
+```{r}
+xmat = as.matrix(ddf[, -1])   
+ymat = ddf$type               
+
+# measures goodness of fit with multinomial model
+
+cvfit = cv.glmnet(x,y,family = "multinomial",type.measure="deviance",
+                  nfolds = 10, alpha = 0)
+
+plot(cvfit) 
+```
+
+Next, a tree-based model was created to predict cancer type based on the patient's data using the same training data as the logistic model to allow for the most unbiased comparison of performance. The variables used in the tree were Gender, Smoking, Diet_Red_Meat, Obesity, and Air_Pollution. The number of nodes used was 11, and the missclassification rate was 0.35. The variables used make sense in regard to predicting cancer, as Smoking and Air_Pollution make sense in predicting lung cancer, and Gender may have an influence on breast cancer and prostate cancer prediction.
+
+## Tree Based Model
+```{r}
+# creates tree based model on training data
+ttree = tree(type~., data=ddf, subset=train)
+
+summary(ttree)
+plot(ttree)
+text(ttree, pretty=0, cex=0.5)
+```
+
+## Out of Sample Performance: Tree 
+An overall accuracy score was calculated to evaluate the performance of the tree, which was 0.65. Moreover, the accuracy score was evaluated for each cancer type, which resulted in surprising numbers. The tree model completely failed to create a terminal node for skin cancer, meaning it was not an outcome of the tree. Therefore, the model produced zero correct skin cancer predictions on the test data. Contrary, the tree was the most successful in correctly predicting lung cancer, with an accuracy rate of 0.9387755, the highest score thus far. \
+
+```{r}
+# predicts on test data 
+yhat = predict(ttree, newdata=ddf[test,], type = "class")
+
+# confusion matrix
+confTree = table(Predicted = yhat, Actual = ddf[test,]$type)
+
+# overall accuracy score
+accTree = sum(diag(confTree)) / sum(confTree)
+accTree
+
+# calculates individual accuracy score
+cancerAccTree = diag(confTree) / colSums(confTree)
+cancerAccTree
+```
+
+
+## Pruning
+Since tree-based models are often prone to overfitting, I wanted to see how the model could change with pruning. As the model complexity increases (the number of nodes), the deviance drops relatively quickly. Around 6-7 terminal nodes, there is a plateau, suggesting complexity does not improve the deviance.
+```{r}
+# plots number of terminal nodes versus deviance
+cvtree = cv.tree(object=ttree)
+plot(cvtree$size, cvtree$dev, type='b', 
+     xlab = "Number of Terminal Nodes", ylab = "Deviance")
+```
+
+Below is the tree plot after pruning to have 7 terminal nodes. 
+```{r}
+# prune tree with 7 terminal nodes
+pruned = prune.tree(ttree, best=7)
+plot(pruned)
+text(pruned, pretty=0, cex = 0.7)
+```
+
+## Out of Sample Performance: Pruned Tree
+Here, the model was performed on the test data, and the accuracy score was calculated to be 0.565, which is considerably lower than the original tree. While the complexity was higher for the previous tree, the accuracy score was better, suggesting that the previous tree is more appropriate for this specific dataset. Reducing the complexity erases nodes necessary for correctly predicting cancers. The accuracy score significantly dropped for correctly predicting prostate cancer, while the rest of the accuracy scores remained relatively close to their original values. \
+
+```{r}
+# predicts on test data
+yhat = predict(pruned, newdata=ddf[test,], type = "class")
+
+# confusion matrix
+confPruned = table(Predicted = yhat, Actual = ddf[test,]$type)
+
+
+# calculates overall accuracy score
+accPruned = sum(diag(confPruned)) /sum(confPruned)
+accPruned
+
+# calculates individual accuracy score
+cancerAccPruned = diag(confPruned) / colSums(confPruned)
+cancerAccPruned
+```
+
+# Comparing Accuracy
+A table was compiled to compare accuracy scores for the model overall, as well as for predicting specific cancer types. The multinomial logistic model was the best overall in correctly predicting cancer types, with an accuracy score of 0.7266667. The unpruned tree model, however, was the best in correctly predicting lung and breast cancer, despite not capturing other forms of cancer well. \
+```{r}
+# assigns all accuracy scores to a table
+
+accTable = data.frame(
+  Model = c("Multinomial Logistic", "Tree", "Pruned Tree"),
+  accuracy = c(accLogistic, accTree, accPruned),
+  accBreast = c(cancerAccLogistic[1],cancerAccTree[1],cancerAccPruned[1]),
+  accColon = c(cancerAccLogistic[2],cancerAccTree[2],cancerAccPruned[2]),
+  accLung = c(cancerAccLogistic[3],cancerAccTree[3],cancerAccPruned[3]),
+  accProstate = c(cancerAccLogistic[4],cancerAccTree[4],cancerAccPruned[4]),
+  accSkin = c(cancerAccLogistic[5],cancerAccTree[5],cancerAccPruned[5]) 
+)
+
+accTable
+
+# plots overall accuracy score for each model
+
+ggplot(accTable, aes(x = Model, y = accuracy)) +
+  geom_bar(stat = "identity", fill = "maroon") +
+  labs(title = "Accuracy Score of Models", y = "Accuracy") +
+  theme_minimal()
+```
+
+## Conclusion and Future Research
+This project successfully used two models to predict five different types of cancer using multinomial logistic regression and a tree-based model. The performance of both models was evaluated using a train-test split technique, and both had relatively successful outcomes. While the logistic model performed better overall, valuable information was still gathered from the tree-based model, as it predicted individual cancers better than the logistic model. In the future, it would be informative to use bagging to evaluate the best tree model and find a way to successfully predict skin cancer using a tree-based model. While the accuracy scores were relatively good, with a predictive variable, such as cancer, having the most accurate model possible is necessary in order to ensure the safety of a patient. 
+
+## References 
+Data set: \
+Masryo, T. (2025, December 6). Cancer risk factors. Kaggle. https://www.kaggle.com/datasets/tarekmasryo/cancer-risk-factors-dataset/data 
+
+Code adapted from 11.3, 13.3, and 13.4, examples: \
+Šamara, M. (2022, December 14). Machine Learning for Data Science (Lecture Notes). https://math.la.asu.edu/~samara/MLearn-lectures/forward-stepwise-selection.html 
